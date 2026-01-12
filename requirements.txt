@@ -1,0 +1,9 @@
+Django>=5.0
+aiogram>=3.0
+python-dotenv
+requests
+Pillow
+apscheduler
+psycopg2-binary
+redis
+uvloop

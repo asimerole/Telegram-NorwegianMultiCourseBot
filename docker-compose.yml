@@ -1,0 +1,53 @@
+services:
+  # 1. БАЗА ДАНИХ
+  db:
+    image: postgres:15-alpine
+    restart: always
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    env_file:
+      - .env
+
+  # 2. REDIS (Для станів і FSM)
+  redis:
+    image: redis:7-alpine
+    restart: always
+    volumes:
+      - redis_data:/data
+    # Команда для збереження даних на диск
+    command: redis-server --save 60 1 --loglevel warning
+
+  # 3. БОТ (Основна логіка)
+  bot:
+    build: .
+    restart: always
+    command: python bot.py
+    volumes:
+      - .:/app          # Прокидаємо код, щоб зміни працювали відразу (для зручності)
+      - media_data:/app/media  # Спільна папка для фото/відео
+    env_file:
+      - .env
+    depends_on:
+      - db
+      - redis
+
+  # 4. DJANGO АДМІНКА (Веб-інтерфейс)
+  admin:
+    build: .
+    restart: always
+    # Запускаємо сервер адмінки на 0.0.0.0, щоб бачити його ззовні
+    command: python manage.py runserver 0.0.0.0:8000
+    volumes:
+      - .:/app
+      - media_data:/app/media  # Та сама папка, що і у бота!
+    ports:
+      - "8000:8000"  # Відкриваємо порт назовні
+    env_file:
+      - .env
+    depends_on:
+      - db
+
+volumes:
+  postgres_data:
+  redis_data:
+  media_data:  # Том для збереження картинок уроків
