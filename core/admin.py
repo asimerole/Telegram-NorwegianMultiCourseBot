@@ -58,8 +58,8 @@ def duplicate_course(modeladmin, request, queryset):
 
 @admin.register(Course)
 class CourseAdmin(admin.ModelAdmin):
-    list_display = ('title', 'duration_days')            # What to show in the list table
-    inlines = [LessonInline]            # Insert lessons directly into the course page
+    list_display = ('title', 'duration_days')   # What to show in the list table
+    inlines = [LessonInline]                    # Insert lessons directly into the course page
     actions = [duplicate_course]
     search_fields = ('title',)
     
