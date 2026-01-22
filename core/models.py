@@ -4,7 +4,6 @@ from django.utils.safestring import mark_safe
 
 class Course(models.Model):
     title = models.CharField("Название курса", max_length=100)
-    keyword = models.CharField("Кодовое слово (из видео)", max_length=50, unique=True)
     description = models.TextField("Описание (для админа)", blank=True)
     
     start_message = models.TextField(
@@ -24,7 +23,7 @@ class Course(models.Model):
     duration_days = models.PositiveIntegerField("Тривалість (днів)", default=5)
 
     def __str__(self):
-        return f"{self.title} [{self.keyword}]"
+        return f"{self.title}"
 
     class Meta:
         verbose_name = "Мини-курс"
