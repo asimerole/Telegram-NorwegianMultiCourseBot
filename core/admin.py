@@ -40,10 +40,6 @@ def duplicate_course(modeladmin, request, queryset):
         original_course.pk = None 
         original_course.title = f"Копия: {original_course.title}"
         
-        # Add a random suffix to the keyword because it is unique (must be unique)
-        
-        original_course.keyword = f"{original_course.keyword}_copy_{random.randint(100, 999)}"
-        
         original_course.save()          # A new course has now been created in the database.
         new_course = original_course    # For code clarity
         
@@ -56,15 +52,16 @@ def duplicate_course(modeladmin, request, queryset):
     # Display a success message
     modeladmin.message_user(
         request, 
-        f"Успешно скопировано {queryset.count()} курс(ов). Не забудьте изменить кодовые слова!", 
+        f"Успешно скопировано {queryset.count()} курс(ов).", 
         messages.SUCCESS
     )
 
 @admin.register(Course)
 class CourseAdmin(admin.ModelAdmin):
-    list_display = ('title', 'keyword') # What to show in the list table
+    list_display = ('title', 'duration_days')            # What to show in the list table
     inlines = [LessonInline]            # Insert lessons directly into the course page
     actions = [duplicate_course]
+    search_fields = ('title',)
     
 
 @admin.register(Lesson)
