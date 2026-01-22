@@ -6,9 +6,10 @@ def main_menu_keyboard():
             [
                 KeyboardButton(text="🆘 Написать в поддержку"),
                 KeyboardButton(text="❓ Часто задаваемые вопросы"),
-                # Можна додати ще кнопку "Мій прогрес", якщо захочеш
+                KeyboardButton(text="🔑 Ввести код доступа"),
+                # You can add a “My Progress” button 
             ]
         ],
-        resize_keyboard=True, # Щоб кнопки були маленькі і акуратні
-        persistent=True       # Щоб меню не ховалося
+        resize_keyboard=True, # So that the buttons are small and neat
+        persistent=True       # So that the menu does not hide
     )

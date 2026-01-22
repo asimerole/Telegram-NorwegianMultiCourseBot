@@ -2,48 +2,58 @@ import csv
 from django.contrib import admin, messages
 from django.contrib.auth.models import Group
 from django.http import HttpResponse
-from .models import BotMessage, Course, Lesson, AccessCode, BotUser, FAQItem
+from .models import BotMessage, Course, Lesson, AccessCode, BotUser, FAQItem, Enrollment
 
-# Це проста реєстрація
-admin.site.register(AccessCode)
+# It's a simple registration process
 
 admin.site.unregister(Group)
-admin.site.site_header = "Панель управления Ботом"
+admin.site.site_header = "Панель управления Multi-Bot"
 admin.site.site_title = "Norwegian Course Bot"
-admin.site.index_title = "Настройка курсов"
+admin.site.index_title = "Настройка курсов и подписок"
 
-# Це красива реєстрація (щоб уроки додавати прямо всередині курсу)
+# This is a beautiful registration (to add lessons directly within the course)
 class LessonInline(admin.StackedInline):
+    """Shows lessons within the Course settings"""
     model = Lesson
-    extra = 1 
+    extra = 0
+    fields = ('day_number', 'send_time', 'lesson_type', 'text')
+    show_change_link = True 
+
+class EnrollmentInline(admin.TabularInline):
+    model = Enrollment
+    extra = 0  
+    fields = ('course', 'current_day', 'is_active', 'start_date') 
+    readonly_fields = ('start_date',) 
+    can_delete = True 
 
 @admin.action(description="⚡Создать полную копию (с уроками)")
 def duplicate_course(modeladmin, request, queryset):
-    # queryset - це список курсів, які вибрав админ галочкою
-    
+    # queryset is a list of courses selected by the administrator with a check mark
+    import random
+
     for original_course in queryset:
-        # 1. Зберігаємо список уроків, поки ми ще не змінили об'єкт курсу
+        # We keep the list of lessons until we change the course object
         original_lessons = list(original_course.lessons.all())
         
-        # 2. Клонуємо сам КУРС
-        # Щоб скопіювати об'єкт в Django, достатньо скинути його pk (id) в None і зберегти
+        # Cloning the COURSE itself
+        # To copy an object in Django, simply set its pk (id) to None and save it.
         original_course.pk = None 
         original_course.title = f"Копия: {original_course.title}"
         
-        # Додаємо випадковий хвіст до ключового слова, бо воно unique (має бути унікальним)
-        import random
+        # Add a random suffix to the keyword because it is unique (must be unique)
+        
         original_course.keyword = f"{original_course.keyword}_copy_{random.randint(100, 999)}"
         
-        original_course.save() # Тепер у базі створився новий курс
-        new_course = original_course # Для ясності коду
+        original_course.save()          # A new course has now been created in the database.
+        new_course = original_course    # For code clarity
         
-        # 3. Клонуємо УРОКИ і прив'язуємо до нового курсу
+        # Clone LESSONS and link them to the new course
         for lesson in original_lessons:
-            lesson.pk = None # Це робить урок новим записом
-            lesson.course = new_course # Прив'язуємо до новоствореного курсу
+            lesson.pk = None            # This makes the lesson a new entry.
+            lesson.course = new_course  # Link to the newly created course
             lesson.save()
             
-    # Виводимо повідомлення про успіх
+    # Display a success message
     modeladmin.message_user(
         request, 
         f"Успешно скопировано {queryset.count()} курс(ов). Не забудьте изменить кодовые слова!", 
@@ -52,28 +62,27 @@ def duplicate_course(modeladmin, request, queryset):
 
 @admin.register(Course)
 class CourseAdmin(admin.ModelAdmin):
-    list_display = ('title', 'keyword') # Що показувати в таблиці списку
-    inlines = [LessonInline] # Вставляємо уроки прямо в сторінку курсу
-
+    list_display = ('title', 'keyword') # What to show in the list table
+    inlines = [LessonInline]            # Insert lessons directly into the course page
     actions = [duplicate_course]
     
 
 @admin.register(Lesson)
 class LessonAdmin(admin.ModelAdmin):
-    list_display = ('course', 'day_number', 'time_slot', 'lesson_type', 'short_text')
+    list_display = ('course', 'day_number', 'send_time', 'lesson_type', 'short_text')
     list_filter = ('course', 'lesson_type', 'day_number')
+    ordering = ('course', 'day_number', 'send_time')
     
-    # Групуємо поля для краси
     fieldsets = (
-        ('Розклад та Тип', {
-            'fields': ('course', 'day_number', 'time_slot', 'lesson_type')
+        ('Расписание', {
+            'fields': ('course', 'day_number', 'send_time', 'lesson_type')
         }),
-        ('Контент (Медиа)', {
+        ('Контент', {
             'fields': ('text', 'image', 'audio', 'video_note', 'file_doc')
         }),
-        ('Настройка Теста/Задания', {
+        ('Тест / Опрос', {
             'fields': ('quiz_options', 'correct_answer', 'error_feedback'),
-            'description': 'Заполнять ТОЛЬКО если выбран тип "Тест" или "Ввести ответ". Для теории оставить пустым.'
+            'description': 'Заполнять только для тестов.'
         }),
     )
 
@@ -82,45 +91,15 @@ class LessonAdmin(admin.ModelAdmin):
     
 @admin.register(BotUser)
 class BotUserAdmin(admin.ModelAdmin):
-    # 1. СТОВПЧИКИ: Що показувати в таблиці
-    list_display = ('first_name', 'username', 'telegram_id', 'get_status_display', 'current_course', 'course_start_date', 'created_at')
-
-    readonly_fields = ('course_start_date', 'created_at')
-
-    # 2. ФІЛЬТРИ: Бокова панель праворуч 
-    list_filter = ('current_course', 'created_at')
-    
-    # 3. ПОШУК: Рядок пошуку зверху
+    # COLUMNS: What to display in the table
+    list_display = ('first_name', 'username', 'telegram_id', 'created_at', 'get_courses_list')    
     search_fields = ('username', 'first_name', 'telegram_id')
-    
-    # 4. СОРТУВАННЯ: За замовчуванням нові зверху
     ordering = ('-created_at',)
-
-    # 5. КУЛЬКУЛЯТОР (Додаткова логіка для стовпчика "Статус")
-    @admin.display(description='Этап обучения')
-    def get_status_display(self, obj):
-        # 1. Якщо курсу немає
-        if not obj.current_course:
-            return "⚪ Только зашёл"
-        
-        # 2. Якщо курс є, але дата старту не задана (баг або очікування)
-        if not obj.course_start_date:
-            return "🟡 Ждет старта"
-
-        # 3. Рахуємо реальний день
-        day = obj.get_real_day()
-
-        # 4. Красиве відображення
-        if day > 5: # Якщо курс 5 днів
-            return "🏁 ЗАВЕРШИЛ"
-        elif day < 1:
-            return "🕒 Скоро старт"
-        else:
-            return f"🟢 День {day}"
-    
     actions = ["export_as_csv"]
+
+    inlines = [EnrollmentInline]
     
-    # 6. Експорт в ексель таблицю
+    # Export to Excel table
     @admin.action(description="Испортировать выбранные в Excel (CSV)")
     def export_as_csv(self, request, queryset):
         meta = self.model._meta
@@ -136,6 +115,32 @@ class BotUserAdmin(admin.ModelAdmin):
 
         return response
     
+    @admin.display(description='Курсы')
+    def get_courses_list(self, obj):
+        # Получаем все активные курсы юзера
+        courses = obj.enrollments.filter(is_active=True)
+        # Собираем их названия в строку
+        return ", ".join([f"{e.course.title} (Д.{e.current_day})" for e in courses])
+
+admin.register(Enrollment)
+class EnrollmentAdmin(admin.ModelAdmin):
+    """
+    A separate page to see everyone who is currently studying
+    """
+    list_display = ('user', 'course', 'get_status', 'is_active', 'start_date')
+    list_filter = ('course', 'is_active', 'current_day')
+    search_fields = ('user__username', 'user__first_name', 'user__telegram_id')
+    autocomplete_fields = ['user', 'course']
+
+    @admin.display(description='Прогресс')
+    def get_status(self, obj):
+        real_day = obj.get_real_day()
+        if not obj.is_active:
+            return "🔴 Остановил"
+        if real_day > obj.course.duration_days:
+            return "🏁 ЗАВЕРШИЛ"
+        return f"🟢 День {obj.current_day} (Реальный: {real_day})"
+    
 @admin.register(FAQItem)
 class FAQAdmin(admin.ModelAdmin):
     list_display = ('question', 'order', 'is_visible')
@@ -146,15 +151,28 @@ class FAQAdmin(admin.ModelAdmin):
 class BotMessageAdmin(admin.ModelAdmin):
     list_display = ('description', 'slug', 'text_preview')
     search_fields = ('slug', 'description', 'text')
-    # Делаем slug только для чтения, если запись уже создана, чтобы не сломать бота
+    # Make the slug read-only if the entry already exists, so as not to break the bot
     readonly_fields = ('slug',) 
 
     def text_preview(self, obj):
         return obj.text[:50] + "..." if obj.text else "-"
     text_preview.short_description = "Текст"
     
-    # Разрешаем редактировать slug только при создании новой записи
+    # Allow editing of slugs only when creating a new entry
     def get_readonly_fields(self, request, obj=None):
-        if obj: # редактирование существующей
+        if obj: 
             return self.readonly_fields
         return ()
+
+@admin.register(AccessCode)
+class AccessCodeAdmin(admin.ModelAdmin):
+    list_display = ('code', 'get_courses', 'is_active', 'activated_by', 'created_at')
+    search_fields = ('code', 'activated_by__username')
+    list_filter = ('is_active',)
+    
+    @admin.display(description="Курсы (Пакет)")
+    def get_courses(self, obj):
+        courses = [c.title for c in obj.courses.all()]
+        if not courses:
+            return "⚠️ ПУСТОЙ (Ничего не откроет)"
+        return ", ".join(courses)

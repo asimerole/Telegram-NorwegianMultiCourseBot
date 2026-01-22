@@ -15,7 +15,7 @@ def get_faq_answer(item_id: int):
     except FAQItem.DoesNotExist:
         return None
 
-# --- 1. Вход в меню (по кнопке "❓ Часто задаваемые вопросы") ---
+# Enter the menu (by clicking the "❓ Часто задаваемые вопросы" button) 
 @router.message(F.text.in_({"❓ Часто задаваемые вопросы", "/faq"}), StateFilter('*'))
 async def cmd_faq(message: Message):
     kb = await get_faq_main_kb()
@@ -25,26 +25,24 @@ async def cmd_faq(message: Message):
         
     await message.answer("👇 Выберите вопрос:", reply_markup=kb)
 
-# Колбек для навигации: передаем только ID вопроса
+# Callback for navigation: only pass the question ID
 class FaqCallback(CallbackData, prefix="faq"):
-    action: str  # 'list' или 'show'
-    id: int = 0  # ID записи в БД
+    action: str  # 'list' or 'show'
+    id: int = 0  # Database record ID
 
-# Асинхронная функция для получения вопросов из базы
+# Asynchronous function for retrieving questions from the database
 @sync_to_async
 def get_faq_list():
-    # Преобразуем QuerySet в список, чтобы безопасно использовать в асинхронке
+    # Convert QuerySet to a list for safe use in asynchronous operations
     return list(FAQItem.objects.filter(is_visible=True).order_by('order'))
 
-# Клавиатура списка вопросов (строится динамически)
+# Question list keyboard (built dynamically)
 async def get_faq_main_kb():
     builder = InlineKeyboardBuilder()
-    
-    # Тянем данные из БД
     items = await get_faq_list()
     
     if not items:
-        return None # Если вопросов нет
+        return None
 
     for item in items:
         builder.button(
@@ -56,41 +54,40 @@ async def get_faq_main_kb():
     builder.adjust(1)
     return builder.as_markup()
 
-# Клавиатура "Назад"
+# Back Keyboard
 def get_back_kb():
     builder = InlineKeyboardBuilder()
     builder.button(text="🔙 К списку вопросов", callback_data=FaqCallback(action="list"))
     return builder.as_markup()
 
-# --- 2. Показать список (кнопка "Назад") ---
+# Show list ("Назад" button) 
 @router.callback_query(FaqCallback.filter(F.action == "list"))
 async def faq_list_callback(callback: CallbackQuery):
     kb = await get_faq_main_kb()
-    # Редактируем текущее сообщение
+    # Editing the current message
     await callback.message.edit_text("👇 Выберите вопрос:", reply_markup=kb)
     await callback.answer()
 
-# --- 3. Показать ответ ---
+# Show answer 
 @router.callback_query(FaqCallback.filter(F.action == "show"))
 async def faq_show_callback(callback: CallbackQuery, callback_data: FaqCallback):
-    # Достаем ответ из базы по ID
+    # Retrieve the answer from the database by ID
     item = await get_faq_answer(callback_data.id)
     
     if not item:
         await callback.answer("Этот вопрос был удален.", show_alert=True)
-        # Можно обновить список
         kb = await get_faq_main_kb()
         await callback.message.edit_text("👇 Выберите вопрос:", reply_markup=kb)
         return
 
-    # Показываем ответ + кнопку Назад
+    # Show answer + Back button
     await callback.message.edit_text(
         text=f"<b>{item.question}</b>\n\n{item.answer}",
         reply_markup=get_back_kb()
     )
     await callback.answer()
 
-# --- 4. Закрытие ---
+# Close 
 @router.callback_query(F.data == "close_faq")
 async def close_faq(callback: CallbackQuery):
     await callback.message.delete()

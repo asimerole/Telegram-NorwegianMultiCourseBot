@@ -5,57 +5,34 @@ from core.models import Course, BotUser, Lesson, UserProgress
 from states import Learning
 from django.utils import timezone # Для фиксации времени старта
 from keyboards import main_menu_keyboard
-from services.sender import trigger_next_lesson
 from asgiref.sync import sync_to_async
 from services.utils import normalize_text
 
 router = Router()
 
-@router.message(Learning.waiting_for_keyword)
-async def process_keyword(message: Message, state: FSMContext):
-    # 1. Нормализуем текст (убираем пробелы, делаем маленькие буквы)
-    keyword_input = message.text.strip()
-    
-    # 2. Ищем курс в базе (iexact = поиск без учета регистра, Test == test)
-    course = Course.objects.filter(keyword__iexact=keyword_input).first()
-
-    if not course:
-        await message.answer(
-            "🤔 Хм, я не знаю такого кодового слова.\n"
-            "Проверь, правильно ли ты его написал, и попробуй еще раз."
-        )
+# --- 1. НАТИСКАННЯ КНОПКИ "✍️ Написати відповідь" ---
+@router.callback_query(F.data.startswith("reply_task:"))
+async def on_reply_click(callback: CallbackQuery, state: FSMContext):
+    try:
+        _, lesson_id_str = callback.data.split(":")
+        lesson_id = int(lesson_id_str)
+    except ValueError:
+        await callback.answer("Ошибка кнопки.")
         return
 
-    # 3. Достаем пользователя
-    user = BotUser.objects.get(telegram_id=message.from_user.id)
-
-    # ПРОВЕРКА: Не проходит ли он уже другой курс?
-    # Если у юзера уже есть курс и он не закончен (логику окончания добавим позже)
-    if user.current_course and user.current_course != course:
-        await message.answer(
-            f"⛔ Ты уже проходишь курс «{user.current_course.title}».\n"
-            "Закончи его, прежде чем начинать новый!"
-        )
-        return
-
-    # 4. Активируем курс пользователю
-    user.current_course = course
-    user.course_start_date = timezone.now()
-    user.save()
+    # Запам'ятовуємо, на який урок відповідає юзер
+    await state.update_data(lesson_id=lesson_id, attempts=0)
     
-    msg_text = user.current_course.start_message or "Курс начался!"
-    await message.answer(msg_text,
-            reply_markup=main_menu_keyboard() 
-    )
+    # Переводимо в режим очікування тексту
+    await state.set_state(Learning.waiting_for_text_answer)
 
-    # 5. Переводим в состояние "В процессе", чтобы он не мог снова вводить слова
-    await state.set_state(Learning.in_process)
-
-# --- ЧАСТЬ 1: ОБРАБОТКА КНОПОК (QUIZ) ---
+    # Робимо Reply (відповідь на повідомлення), щоб було красиво
+    await callback.message.reply("✍️ <b>Напиши свой ответ на это задание:</b>")
+    await callback.answer()
+    
+# BUTTON PROCESSING (QUIZ) 
 @router.callback_query(F.data.startswith("ans:"))
 async def check_quiz_answer(callback: CallbackQuery, bot: Bot):
-    # Разбираем callback_data="ans:ID_УРОКА:ОТВЕТ"
-    # split(":", 2) означает "раздели только первые 2 двоеточия", остальное - это текст ответа
     try:
         _, lesson_id_str, selected_answer = callback.data.split(":", 2)
         lesson_id = int(lesson_id_str)
@@ -63,7 +40,6 @@ async def check_quiz_answer(callback: CallbackQuery, bot: Bot):
         await callback.answer("Ошибка данных кнопки.")
         return
 
-    # Достаем урок
     try:
         lesson = Lesson.objects.get(id=lesson_id)
     except Lesson.DoesNotExist:
@@ -76,11 +52,11 @@ async def check_quiz_answer(callback: CallbackQuery, bot: Bot):
     is_correct = (selected_answer == correct_answer)
 
     if is_correct:
-        # --- 1. ПРАВИЛЬНЫЙ ОТВЕТ ---
+        # CORRECT ANSWER 
         await callback.answer("✅ Правильно!")
         await callback.message.answer(f"👍 <b>Верно!</b>\n{correct_answer}")
 
-        # Красим кнопки (как у тебя и было)
+        # We paint the buttons
         current_markup = callback.message.reply_markup
         new_keyboard = []
         if current_markup:
@@ -97,52 +73,39 @@ async def check_quiz_answer(callback: CallbackQuery, bot: Bot):
         await callback.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(inline_keyboard=new_keyboard))
 
         user = await sync_to_async(BotUser.objects.get)(telegram_id=callback.from_user.id)
-        # Важливо використати sync_to_async для запиту в БД
+        # It is important to use sync_to_async for database queries.
         _, created = await sync_to_async(UserProgress.objects.get_or_create)(user=user, lesson=lesson)
-        
-        # 2. Якщо ми вперше відповіли правильно (created=True) або просто хочемо пустити далі
-        # Отримуємо state (його треба додати в аргументи функції)
-        # Викликаємо перехід
-        await trigger_next_lesson(
-            bot=bot,
-            user_id=user.telegram_id,
-        )
-
     else:
-        # --- 2. НЕПРАВИЛЬНЫЙ ОТВЕТ ---
-        
-        # 1. Получаем списки вариантов и объяснений
-        # splitlines() надежнее, чем split('\n'), так как удаляет символы переноса корректно
+        # WRONG ANSWER
+        # We get lists of options and explanations.
+        # splitlines() is more reliable than split(‘\n’) because it removes line breaks correctly.
         options = [opt.strip() for opt in lesson.quiz_options.splitlines() if opt.strip()]
         explanations = [exp.strip() for exp in lesson.error_feedback.splitlines()] # Тут пустые строки важны!
 
         feedback_text = "❌ Неправильно."
 
-        # 2. Ищем индекс нажатой кнопки в списке вариантов
+        # Search for the index of the pressed button in the list of options
         try:
-            # Находим, какой по счету этот вариант (0, 1, 2...)
-            index = options.index(selected_answer)
-            
-            # 3. Проверяем, есть ли объяснение для этого индекса
-            if index < len(explanations):
-                specific_feedback = explanations[index]
-                if specific_feedback:
-                    feedback_text = f"❌ {specific_feedback}"
+            if selected_answer in options:
+                index = options.index(selected_answer)
+                if index < len(explanations):
+                    specific_feedback = explanations[index]
+                    if specific_feedback:
+                        feedback_text = f"❌ {specific_feedback}"
         except ValueError:
-            # Если вдруг текст кнопки не совпал с опциями в базе (например, админ поменял текст после отправки)
+            # If the button text does not match the options in the database (for example, the administrator changed the text after sending)
             pass
 
-        # 4. Показываем всплывающее окно (alert)
+        # Display a pop-up window (alert)
         await callback.answer(feedback_text, show_alert=True)
 
 
-# --- ЧАСТЬ 2: ОБРАБОТКА ТЕКСТОВОГО ОТВЕТА ---
+# PROCESSING THE TEXT RESPONSE
 @router.message(Learning.waiting_for_text_answer)
 async def check_text_answer(message: Message, state: FSMContext, bot: Bot):
-    # 1. Узнаем, на какой урок юзер отвечает
+    # Let's find out which lesson the user is responding to
     data = await state.get_data()
     lesson_id = data.get("lesson_id")
-
     attempts = data.get("attempts", 0) + 1
     
     if not lesson_id:
@@ -150,7 +113,7 @@ async def check_text_answer(message: Message, state: FSMContext, bot: Bot):
         await state.clear()
         return
 
-    # 2. Достаем урок
+    # We get the lesson
     try:
         lesson = await sync_to_async(Lesson.objects.get)(id=lesson_id)
     except Lesson.DoesNotExist:
@@ -158,10 +121,9 @@ async def check_text_answer(message: Message, state: FSMContext, bot: Bot):
         await state.clear()
         return
 
-    # 3. СРАВНИВАЕМ (приводим всё к нижнему регистру для надежности)
+    # COMPARISON (we convert everything to lowercase for reliability)
     user_words = normalize_text(message.text)
     correct_words = normalize_text(lesson.correct_answer)
-
     is_correct = (user_words == correct_words)
 
     if is_correct or attempts >= 3:
@@ -179,14 +141,8 @@ async def check_text_answer(message: Message, state: FSMContext, bot: Bot):
         await sync_to_async(UserProgress.objects.get_or_create)(user=user, lesson=lesson)
         await state.update_data(attempts=0)
         await state.set_state(Learning.in_process)
-
-        await trigger_next_lesson(
-            bot=bot,
-            user_id=user.telegram_id,
-            state=state 
-        )
     else:
-        # Если неправильно
+        # If incorrect
         await state.update_data(attempts=attempts)
         remaining = 3 - attempts
         error_msg = f"❌ Не совсем так. Осталось попыток: {remaining}."
@@ -204,25 +160,7 @@ async def check_text_answer(message: Message, state: FSMContext, bot: Bot):
         base_feedback = lesson.error_feedback or error_msg
         await message.answer(f"{base_feedback}{hint}")
 
-@router.callback_query(F.data.startswith("next_lesson:"))
-async def on_next_lesson(callback: CallbackQuery, bot: Bot, state: FSMContext):
-    try:
-        await callback.message.edit_text(
-            text=f"{callback.message.html_text}\n\n✅ <i>Прочитано</i>",
-            reply_markup=None
-        )
-    except Exception:
-        pass 
-
-    await trigger_next_lesson(
-        bot=bot,
-        user_id=callback.from_user.id,
-        state=state
-    )
-    
-    await callback.answer()
-
 @router.callback_query(F.data == "ignore")
 async def ignore_callback(callback: CallbackQuery):
-    # Просто убираем часики загрузки
+    # Just remove the loading clock
     await callback.answer()

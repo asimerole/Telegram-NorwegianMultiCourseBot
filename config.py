@@ -6,4 +6,6 @@ load_dotenv()
 
 # Telegram Bot Token
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+
+# Telegram admin user id
 ADMIN_ID = int(os.getenv("ADMIN_ID"))

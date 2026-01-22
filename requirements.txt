@@ -7,3 +7,4 @@ apscheduler
 psycopg2-binary
 redis
 uvloop
+schedule

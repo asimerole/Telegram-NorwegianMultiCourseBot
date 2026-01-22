@@ -7,22 +7,11 @@ class Course(models.Model):
     keyword = models.CharField("Кодовое слово (из видео)", max_length=50, unique=True)
     description = models.TextField("Описание (для админа)", blank=True)
     
-    def __str__(self):
-        return f"{self.title} [{self.keyword}]"
-
-    class Meta:
-        verbose_name = "Мини-курс"
-        verbose_name_plural = "Мини-курс"
-    
     start_message = models.TextField(
-        "Уведомление по окончанию курса", 
+        "Уведомление по старту курса", 
         blank=True, 
         default=
             f"🚀 <b>Отлично! Ти записан на курс.</b>\n\n"
-            f"📅 <b>Расписание:</b>\n"
-            f"Материалы будут приходить каждый день в <b>10:00, 14:00 та 18:00</b>.\n\n"
-            f"⏳ <b>Старт:</b> Твой первый день начнётся <b>ЗАВТРА в 10:00</b>.\n"
-            f"Сегодня ты можешь отдыхать и готовится!"
     )
 
     finish_message = models.TextField(
@@ -30,39 +19,42 @@ class Course(models.Model):
         blank=True, 
         default="Поздравляю! Ти прошёл курс. Теперь ты можешь вводить кодовое слово другого курса 😜"
     )
-    
-    # щоб знати скільки днів триває курс (або вираховувати автоматично)
+
+    # to know how many days the course lasts (or calculate it automatically)
     duration_days = models.PositiveIntegerField("Тривалість (днів)", default=5)
+
+    def __str__(self):
+        return f"{self.title} [{self.keyword}]"
+
+    class Meta:
+        verbose_name = "Мини-курс"
+        verbose_name_plural = "Мини-курсы"
+
 
 class Lesson(models.Model):
     TYPE_CHOICES = [
         ('theory', '📚 Просто теория (читать/смотреть)'),
         ('quiz', '✅ Тест (кнопки с вариантами)'),
         ('text_input', '✍️ Вписать правильный ответ вручную'),
-        # ('image_quiz', '🖼 Выбор картинки'), # Можна додати пізніше, якщо встигнеш
-    ]
-
-    TIME_CHOICES = [
-        (10, '10:00'),
-        (12, '12:00'),
-        (18, '18:00'),
+        # ('image_quiz', '🖼 Выбор картинки'), # Can add it later if you have time.
     ]
     
-    course = models.ForeignKey(Course, on_delete=models.CASCADE, verbose_name="К какому курсу", related_name='lessons')
+    course = models.ForeignKey(Course, on_delete=models.CASCADE, verbose_name="Курс", related_name='lessons')
     day_number = models.PositiveIntegerField("День выдачи (1-31)", default=1)
-    time_slot = models.IntegerField("Время выдачи", choices=TIME_CHOICES)
+
+    send_time = models.TimeField("Время отправки", help_text="Например: 17:43 или 09:00", default="10:00")
     
     lesson_type = models.CharField("Тип задания", max_length=20, choices=TYPE_CHOICES, default='theory')
 
-    # Контент уроку
+    # Lesson content
     text = models.TextField("Текст сообщения", blank=True)
     image = models.ImageField("Картинка", upload_to='lessons/images/', blank=True, null=True)
     audio = models.FileField("Аудио", upload_to='lessons/audio/', blank=True, null=True)
     video_note = models.FileField("Видео (кружочек/файл)", upload_to='lessons/video/', blank=True, null=True)
     file_doc = models.FileField("Документ (PDF)", upload_to='lessons/docs/', blank=True, null=True)
 
-    # --- ПОЛЯ ДЛЯ ТЕСТІВ ---
-    # Для Quiz: Замовниця пише варіанти через Enter (новий рядок)
+    # --- FIELDS FOR TESTS ---
+    # For Quiz: The customer writes options using Enter (new line)
     quiz_options = models.TextField(
         "Варианты ответов (каждый с новой строки)", 
         blank=True, 
@@ -73,10 +65,10 @@ class Lesson(models.Model):
         )
     )
     
-    # Правильна відповідь (Текст кнопки або слово для ручного вводу)
+    # Correct answer (Button text or word for manual input)
     correct_answer = models.CharField("Правильный ответ", max_length=255, blank=True, help_text="Точний текст правильного варианта или слова")
     
-    # Повідомлення, якщо відповів неправильно
+    # Notification if answered incorrectly
     error_feedback = models.TextField(
         "Пояснения к ответам (каждое с новой строки)", 
         blank=True, 
@@ -86,19 +78,20 @@ class Lesson(models.Model):
     )
 
     def __str__(self):
-        return f"{self.course.title} - День {self.day_number} в {self.time_slot}:00"
+        return f"{self.course.title} | День {self.day_number} | {self.send_time}"
 
     class Meta:
         verbose_name = "Урок/Задания"
         verbose_name_plural = "Уроки"
-        ordering = ['day_number', 'time_slot', 'id']
+        ordering = ['day_number', 'send_time', 'id']
 
 class AccessCode(models.Model):
     code = models.CharField("Код доступа", max_length=20, unique=True)
+    courses = models.ManyToManyField(Course, verbose_name="Курсы, которые откроются", blank=True)
     is_active = models.BooleanField("Активный?", default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
-    # null=True, blank=True — потому что изначально код ничей (ни кем не активирован)
+    # null=True, blank=True — because initially the code belongs to no one (has not been activated by anyone)
     activated_by = models.ForeignKey(
         'BotUser', 
         on_delete=models.SET_NULL, 
@@ -110,8 +103,7 @@ class AccessCode(models.Model):
 
     def __str__(self):
         owner = f" ({self.activated_by.first_name})" if self.activated_by else ""
-        return f"{self.code}{owner}"
-
+        return f"{self.code} [Курсов: {self.courses.count()}]{owner}"
     class Meta:
         verbose_name = "Код доступа"
         verbose_name_plural = "Коды доступа"
@@ -121,11 +113,6 @@ class BotUser(models.Model):
     username = models.CharField("Username", max_length=255, blank=True, null=True)
     first_name = models.CharField("Имя", max_length=255, blank=True, null=True)
     created_at = models.DateTimeField("Дата регистрации", auto_now_add=True)
-    
-    # Зв'язок з поточним курсом (може бути пустим, якщо ще не ввів кодове слово)
-    current_course = models.ForeignKey(Course, on_delete=models.SET_NULL, null=True, blank=True, verbose_name="Активный курс")
-    course_start_date = models.DateTimeField("Дата начала курса", null=True)
-    current_course_day = models.IntegerField("Текущий день (кэш)", default=0)
 
     def __str__(self):
         return f"{self.first_name} ({self.telegram_id})"
@@ -188,3 +175,30 @@ class BotSettings(models.Model):
     class Meta:
         verbose_name = "Настройка бота"
         verbose_name_plural = "Настройки бота"
+
+class Enrollment(models.Model):
+    """
+    Підписка. Зв'язує Юзера і Курс.
+    """
+    user = models.ForeignKey(BotUser, on_delete=models.CASCADE, related_name='enrollments')
+    course = models.ForeignKey(Course, on_delete=models.CASCADE, verbose_name="Курс")
+    
+    start_date = models.DateTimeField("Дата начала", auto_now_add=True)
+    current_day = models.IntegerField("Текущий день обучения", default=1)
+    is_active = models.BooleanField("Активна?", default=True)
+    
+    # Час тут більше не потрібен, бо час задається в самому Уроці.
+
+    class Meta:
+        unique_together = ('user', 'course')
+        verbose_name = "Подписка"
+        verbose_name_plural = "Подписки"
+
+    def __str__(self):
+        return f"{self.user.first_name} -> {self.course.title} (День {self.current_day})"
+
+    def get_real_day(self):
+        if not self.start_date:
+            return 0
+        delta = timezone.now() - self.start_date
+        return delta.days + 1
