@@ -26,6 +26,8 @@ services:
     volumes:
       - .:/app                 # We wake up the code so that the changes take effect immediately (for convenience).
       - media_data_bot2:/app/media  # Shared folder for photos/videos
+    environment:
+      - TZ=Europe/Berlin
     env_file:
       - .env
     depends_on:
@@ -42,6 +44,8 @@ services:
     volumes:
       - .:/app
       - media_data_bot2:/app/media  # The same folder as the bot!
+    environment:
+      - TZ=Europe/Berlin
     ports:
       - "8001:8000"  # Opening the port to the outside world
     env_file:

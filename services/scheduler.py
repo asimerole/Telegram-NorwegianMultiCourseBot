@@ -4,107 +4,88 @@ import schedule
 import time
 from datetime import datetime
 from asgiref.sync import sync_to_async
-from services.sender import send_lesson
+from services.sender import send_lesson_block
 
 from aiogram import Bot
 from django.utils import timezone
 from django.db.models import F
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-
-# Імпортуємо наші оновлені моделі
 from core.models import Lesson, Enrollment, UserProgress
 
 logger = logging.getLogger(__name__)
 
-async def check_and_send_lessons(bot: Bot):
-    """
-    Головна функція розсилки.
-    Запускається кожну хвилину.
-    """
-    # 1. Отримуємо поточний час сервера
-    now = timezone.now()
-    # Нам потрібні тільки години та хвилини
-    current_hour = now.hour
-    current_minute = now.minute
+async def check_and_send_lessons(bot):
+    now = timezone.localtime(timezone.now())
     
-    # Лог для перевірки (можна закоментувати, якщо смітить в консоль)
-    # logger.info(f"⏰ Tick: {current_hour}:{current_minute}")
-
-    # 2. Шукаємо УРОКИ, які заплановані на ЦЮ хвилину
-    # select_related('course') оптимізує запит, щоб не смикати базу зайвий раз
-    lessons_to_send = await sync_to_async(list)(
+    # We get a list of courses that have ANY lessons available at this moment.
+    active_course_ids = await sync_to_async(list)(
         Lesson.objects.filter(
-            send_time__hour=current_hour, 
-            send_time__minute=current_minute
-        ).select_related('course')
+            send_time__hour=now.hour,
+            send_time__minute=now.minute
+        ).values_list('course_id', flat=True).distinct()
     )
 
-    if not lessons_to_send:
+    if not active_course_ids:
         return
 
-    logger.info(f"Found {len(lessons_to_send)} lessons scheduled for {current_hour}:{current_minute}")
+    # We only accept active subscriptions that are relevant to these courses.
+    active_enrollments = await sync_to_async(list)(
+        Enrollment.objects.filter(
+            is_active=True,
+            course_id__in=active_course_ids
+        ).select_related('user', 'course')
+    )
 
-    # 3. Обробляємо кожен знайдений урок
-    for lesson in lessons_to_send:
-        # Для кожного уроку треба знайти людей, яким він потрібен.
-        # Критерії:
-        # - Активна підписка (Enrollment) на ЦЕЙ курс
-        # - Поточний день підписки (current_day) == дню уроку (day_number)
+    if not active_enrollments:
+        return
+
+    for enrollment in active_enrollments:
         
-        target_enrollments = await sync_to_async(list)(
-            Enrollment.objects.filter(
-                course=lesson.course,
-                is_active=True,
-                current_day=lesson.day_number
-            ).select_related('user')
+        # --- MATH OF DAYS ---
+        # Calculate the difference between “Now” and “Start Date”
+        delta = now.date() - enrollment.start_date.date()
+        
+        # If “Start tomorrow”, then:
+        # Rega 19.01. Now it is 19.01. delta = 0. day_number = 0 (Silence).
+        # Now it is 20.01. delta = 1. day_number = 1 (First lesson).
+        day_number = delta.days 
+        day_number = 1 # for test, default is day_number = delta.days
+        if day_number <= 0:
+            continue 
+
+        # Seeking lessons for this Day and Time
+        lessons = await sync_to_async(list)(
+            Lesson.objects.filter(
+                course=enrollment.course,
+                day_number=day_number,
+                send_time__hour=now.hour,
+                send_time__minute=now.minute
+            )
         )
 
-        if not target_enrollments:
+        if not lessons:
             continue
 
-        logger.info(f"Lesson '{lesson}' (Day {lesson.day_number}) needs to be sent to {len(target_enrollments)} users.")
+        # Check if it has already been sent (Duplicate protection)
+        # Check according to the first lesson in the pack
+        already_sent = await sync_to_async(
+            UserProgress.objects.filter(user=enrollment.user, lesson=lessons[0]).exists
+        )()
+        
+        if already_sent:
+            continue
 
-        # 4. Відправляємо
-        for enrollment in target_enrollments:
-            user = enrollment.user
+        try:
+            await send_lesson_block(bot, enrollment.user, enrollment.course, lessons)
             
-            # Перевірка на дублікат: чи не відправляли ми вже цей урок цьому юзеру?
-            already_sent = await sync_to_async(
-                UserProgress.objects.filter(user=user, lesson=lesson).exists
-            )()
-            
-            if already_sent:
-                continue
-
-            # 🔥 ВІДПРАВКА
-            try:
-                await send_lesson(bot, user.telegram_id, lesson.id)
-                
-                # Записуємо в історію, що відправили
-                await sync_to_async(UserProgress.objects.create)(user=user, lesson=lesson)
-                
-                logger.info(f"✅ Sent lesson {lesson.id} to user {user.telegram_id}")
-                
-            except Exception as e:
-                logger.error(f"❌ Failed to send to {user.telegram_id}: {e}")
-                # Якщо юзер заблокував бота — можна деактивувати підписку (опціонально)
-                # enrollment.is_active = False
-                # await sync_to_async(enrollment.save)()
+            for lesson in lessons:
+                 await sync_to_async(UserProgress.objects.create)(user=enrollment.user, lesson=lesson)
+                 
+        except Exception as e:
+            print(f"❌ Error sending block to {enrollment.user}: {e}")
 
 
-
-async def update_days():
-    """
-    Запускається раз на добу (вночі).
-    Переводить всі активні підписки на наступний день.
-    """
-    logger.info("🌙 Nightly update: Increasing days...")
-    
-    # Використовуємо F-об'єкт для атомарного оновлення (швидко і безпечно)
-    await sync_to_async(lambda: Enrollment.objects.filter(is_active=True).update(current_day=F('current_day') + 1))()
-    
-    logger.info("✅ All active enrollments moved to the next day.")
 
 
 async def scheduler_loop(bot: Bot):
@@ -113,9 +94,6 @@ async def scheduler_loop(bot: Bot):
     """
     # 1. Перевірка уроків — кожну хвилину
     schedule.every(1).minutes.do(lambda: asyncio.create_task(check_and_send_lessons(bot)))
-    
-    # 2. Оновлення днів — кожного дня о 00:01
-    schedule.every().day.at("00:01").do(lambda: asyncio.create_task(update_days()))
 
     logger.info("🚀 Scheduler started!")
 

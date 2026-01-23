@@ -15,13 +15,27 @@ def get_answer_btn(lesson_id):
     builder.button(text="✍️ Написать ответ", callback_data=f"reply_task:{lesson_id}")    
     return builder.as_markup()
 
-async def send_lesson(bot: Bot, chat_id: int, lesson_id: int):
-    try:
-        lesson = await sync_to_async(Lesson.objects.get)(id=lesson_id)
-    except Lesson.DoesNotExist:
-        print(f"❌ Помилка: Урок {lesson_id} не знайдено.")
-        return False
+async def send_lesson_block(bot: Bot, user, course, lessons):
+    """
+    Відправляє заголовок, а потім уроки.
+    """
+    
+    header_text = (
+        f"🔔 <b>Уроки на {lessons[0].send_time.strftime('%H:%M')}</b>\n"
+        f"📚 Курс: <b>{course.title}</b>\n"
+        f"🗓 День: {lessons[0].day_number}"
+    )
 
+    try:
+        await bot.send_message(user.telegram_id, header_text, parse_mode="HTML")
+    except Exception as e:
+        print(f"❌ Не удалось отправить заголовок юзеру {user.telegram_id}: {e}")
+        return
+
+    for lesson in lessons:
+        await send_lesson(bot, user.telegram_id, lesson)
+
+async def send_lesson(bot: Bot, chat_id: int, lesson: Lesson):
     # Media dispatch
     try:
         if lesson.image:

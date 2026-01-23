@@ -4,7 +4,8 @@ from aiogram.fsm.context import FSMContext
 from asgiref.sync import sync_to_async
 from django.utils import timezone
 
-from core.models import AccessCode, BotUser, Enrollment, Lesson, UserProgress
+from core.models import AccessCode, BotUser, Enrollment
+from services.utils import get_text
 from states import Registration
 from keyboards import main_menu_keyboard
 
@@ -91,13 +92,10 @@ async def process_code(message: Message, state: FSMContext):
         if course.start_message:
              await message.answer(course.start_message, parse_mode="HTML")
 
-    courses_str = "\n🔹 ".join(activated_courses_titles)
-    
-    await message.answer(
-        f"✅ <b>Код принят!</b>\n\n"
-        f"Тебе открыт доступ к курсам:\n🔹 {courses_str}\n\n"
-        f"Жди первые уроки по расписанию!",
-        reply_markup=main_menu_keyboard()
-    )
+    courses_str = "\n".join(activated_courses_titles)
 
+    text = await get_text("successfuly_code_text", default="✅ <b>Код принят!</b>\n\n")
+    text = text + "\nКурсы:\n" + courses_str
+
+    await message.answer(text, reply_markup=main_menu_keyboard())
     await state.clear()

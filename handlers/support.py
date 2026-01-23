@@ -45,7 +45,7 @@ async def cmd_set_group(message: Message, bot: Bot):
 # # User clicked the "Написати в підтримку"  button 
 @router.message(F.text.in_({"🆘 Написать в поддержку", "/support"}), StateFilter('*'))
 async def cmd_support(message: Message, state: FSMContext):
-    text = get_text("support_start_text", default="Напиши свой вопрос или сообщение одним текстом, и я передам его куратору. 👇")
+    text = await get_text("support_start_text", default="Напиши свой вопрос или сообщение одним текстом, и я передам его куратору. 👇")
     await message.answer(text, reply_markup=None)
     await state.set_state(Support.waiting_for_message)
 

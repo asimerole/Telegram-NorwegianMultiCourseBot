@@ -109,7 +109,7 @@ async def check_text_answer(message: Message, state: FSMContext, bot: Bot):
     attempts = data.get("attempts", 0) + 1
     
     if not lesson_id:
-        await message.answer("Ошибка: я забыл, на какой вопрос мы отвечаем. Нажми /start.")
+        await message.answer("⚠️ Ошибка: я забыл, на какой вопрос мы отвечаем. Нажми /start.")
         await state.clear()
         return
 
@@ -117,29 +117,34 @@ async def check_text_answer(message: Message, state: FSMContext, bot: Bot):
     try:
         lesson = await sync_to_async(Lesson.objects.get)(id=lesson_id)
     except Lesson.DoesNotExist:
-        await message.answer("Урок был удален.")
+        await message.answer("⚠️ Урок был удален.")
         await state.clear()
         return
 
     # COMPARISON (we convert everything to lowercase for reliability)
     user_words = normalize_text(message.text)
     correct_words = normalize_text(lesson.correct_answer)
+
     is_correct = (user_words == correct_words)
 
     if is_correct or attempts >= 3:
         user = await sync_to_async(BotUser.objects.get)(telegram_id=message.from_user.id)
 
         if is_correct:
-            await message.answer(f"✅ <b>Абсолютно верно!</b>\nОтвет: {lesson.correct_answer}")
+            feedback = (f"✅ <b>Абсолютно верно!</b>\n"
+                                 f"Ответ: <b>{lesson.correct_answer}</b>")
         else:
-            await message.answer(
+            feedback = (
                 f"😔 Попытки исчерпаны.\n"
                 f"Правильный ответ: <b>{lesson.correct_answer}</b>\n"
-                f"Идем дальше!"
             )
         
+        await message.reply(feedback, parse_mode="HTML")
+
         await sync_to_async(UserProgress.objects.get_or_create)(user=user, lesson=lesson)
+
         await state.update_data(attempts=0)
+
         await state.set_state(Learning.in_process)
     else:
         # If incorrect
@@ -158,7 +163,10 @@ async def check_text_answer(message: Message, state: FSMContext, bot: Bot):
              hint = "\n💡 Количество слов не совпадает."
             
         base_feedback = lesson.error_feedback or error_msg
-        await message.answer(f"{base_feedback}{hint}")
+
+        full_text = f"{base_feedback}{hint}\n👇 <i>Попробуй еще раз (просто напиши ответ):</i>"
+        
+        sent_msg = await message.reply(full_text, parse_mode="HTML")
 
 @router.callback_query(F.data == "ignore")
 async def ignore_callback(callback: CallbackQuery):
