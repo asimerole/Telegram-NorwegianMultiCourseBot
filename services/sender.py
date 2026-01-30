@@ -2,13 +2,7 @@ import os
 from aiogram import Bot
 from aiogram.types import FSInputFile, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from asgiref.sync import sync_to_async
-from django.db.models import F
-from core.models import Lesson, UserProgress, BotUser
-from aiogram.fsm.context import FSMContext
-from states import Learning
-from services.utils import finish_course
-
+from core.models import  Lesson
 
 def get_answer_btn(lesson_id):
     builder = InlineKeyboardBuilder()
@@ -85,4 +79,6 @@ async def send_lesson(bot: Bot, chat_id: int, lesson: Lesson):
     except Exception as e:
         print(f"❌ Не удалось отправить сообщение: {e}")
         return False
+    
+
     

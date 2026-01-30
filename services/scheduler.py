@@ -6,16 +6,17 @@ from datetime import datetime
 from asgiref.sync import sync_to_async
 from services.sender import send_lesson_block
 
-from aiogram import Bot
+from aiogram import Bot, Dispatcher
 from django.utils import timezone
 from django.db.models import F
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from core.models import Lesson, Enrollment, UserProgress
+from services.utils import finish_course
 
 logger = logging.getLogger(__name__)
 
-async def check_and_send_lessons(bot):
+async def check_and_send_lessons(bot: Bot, dp: Dispatcher):
     now = timezone.localtime(timezone.now())
     
     # We get a list of courses that have ANY lessons available at this moment.
@@ -65,25 +66,32 @@ async def check_and_send_lessons(bot):
         )
 
         if not lessons:
-            continue
+            pass
+        else:
+            already_sent = await sync_to_async(
+                UserProgress.objects.filter(user=enrollment.user, lesson=lessons[0]).exists
+            )()
+            if not already_sent:
+                try:
+                    await send_lesson_block(bot, enrollment.user, enrollment.course, lessons)
 
-        # Check if it has already been sent (Duplicate protection)
-        # Check according to the first lesson in the pack
-        already_sent = await sync_to_async(
-            UserProgress.objects.filter(user=enrollment.user, lesson=lessons[0]).exists
-        )()
-        
-        if already_sent:
-            continue
+                    for lesson in lessons:
+                        await sync_to_async(UserProgress.objects.create)(user=enrollment.user, lesson=lesson)
+                except Exception as e:
+                    print(f"❌ Error sending block to {enrollment.user}: {e}")
 
-        try:
-            await send_lesson_block(bot, enrollment.user, enrollment.course, lessons)
-            
-            for lesson in lessons:
-                 await sync_to_async(UserProgress.objects.create)(user=enrollment.user, lesson=lesson)
-                 
-        except Exception as e:
-            print(f"❌ Error sending block to {enrollment.user}: {e}")
+        has_more_lessons = await sync_to_async(lambda: Lesson.objects.filter(
+            course=enrollment.course
+        ).exclude(
+            id__in=UserProgress.objects.filter(user=enrollment.user).values('lesson_id')
+        ).exists())()
+
+        if not has_more_lessons:
+            # Уроків більше немає!
+            # Викликаємо спеціальну функцію завершення для Мульти-бота
+            # Передаємо enrollment, щоб знати, ЩО саме закривати
+            await finish_course(bot, enrollment, dp=dp)
+
 
 
 

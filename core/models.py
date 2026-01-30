@@ -1,6 +1,8 @@
 from django.utils import timezone
 from django.db import models
 from django.utils.safestring import mark_safe
+from django.db.models.signals import pre_delete
+from django.dispatch import receiver
 
 class Course(models.Model):
     title = models.CharField("Название курса", max_length=100)
@@ -187,7 +189,6 @@ class Enrollment(models.Model):
     is_active = models.BooleanField("Активна?", default=True)
     
     # Час тут більше не потрібен, бо час задається в самому Уроці.
-
     class Meta:
         unique_together = ('user', 'course')
         verbose_name = "Подписка"
@@ -201,3 +202,21 @@ class Enrollment(models.Model):
             return 0
         delta = timezone.now() - self.start_date
         return delta.days + 1
+    
+@receiver(pre_delete, sender=BotUser)
+def delete_linked_access_code(sender, instance, **kwargs):
+    """
+    Спрацьовує ПЕРЕД тим, як юзер зникне.
+    Поки зв'язок ще існує, ми знаходимо код і знищуємо його.
+    """
+    try:
+        # Шукаємо код, який прив'язаний до цього юзера
+        codes = AccessCode.objects.filter(activated_by=instance)
+        
+        count = codes.count()
+        if count > 0:
+            codes.delete() # Видаляємо фізично з бази
+            print(f"🔥 Разом із юзером {instance.telegram_id} знищено код доступу (всього: {count}).")
+            
+    except Exception as e:
+        print(f"⚠️ Помилка при видаленні коду: {e}")

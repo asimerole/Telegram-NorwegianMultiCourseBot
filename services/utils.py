@@ -81,7 +81,7 @@ async def finish_course(bot: Bot, user: BotUser, dp: Dispatcher = None, state: F
     - state: if called from the Handler (user interaction).
     """
     # Message
-    msg_text = user.current_course.finish_message or "Час вийшов! Курс завершено."
+    msg_text = user.current_course.finish_message or "Время вышло! Курс завершен."
     try:
         await bot.send_message(user.telegram_id, msg_text)
     except Exception:
